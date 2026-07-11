@@ -1,0 +1,11 @@
+# Add more entries to match your project's file structure.
+# Labels here are content-based (what changed); release-drafter autolabeler
+# handles type-based labels (feature/fix/chore) from commit titles.
+
+ci:
+  - changed-files:
+    - any-glob-to-any-file: ['.github/**']
+
+docs:
+  - changed-files:
+    - any-glob-to-any-file: ['*.md', 'docs/**']

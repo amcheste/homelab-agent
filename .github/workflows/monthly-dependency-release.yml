@@ -1,0 +1,142 @@
+name: Monthly Dependency Release
+
+# Opens a patch release PR on the 1st of each month if Dependabot has merged
+# any dependency updates to develop since the last tag. The PR bumps the patch
+# version — you review, merge to develop, then promote develop→main as normal.
+#
+# Nothing is auto-merged or auto-tagged. You stay in control of the release.
+
+on:
+  schedule:
+    - cron: '0 9 1 * *'  # 1st of each month at 09:00 UTC
+  workflow_dispatch:      # manual trigger for testing
+
+permissions:
+  contents: read
+
+jobs:
+  open-release-pr:
+    name: Open patch release PR
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: develop
+          fetch-depth: 0
+
+      - name: Check for dependency commits since last tag
+        id: check
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+
+          if [[ -z "$LAST_TAG" ]]; then
+            echo "No tags found — skipping"
+            echo "has_updates=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Last tag: $LAST_TAG"
+
+          # Match Dependabot commit messages: "chore: bump/Bump <package>..."
+          DEP_COUNT=$(git log "${LAST_TAG}..HEAD" --no-merges --format='%s' \
+            | grep -cEi '^chore(\([^)]+\))?: [Bb]ump ' || true)
+
+          echo "Dependency commits since $LAST_TAG: $DEP_COUNT"
+
+          if [[ "$DEP_COUNT" -eq 0 ]]; then
+            echo "Nothing to release — skipping"
+            echo "has_updates=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_updates=true" >> "$GITHUB_OUTPUT"
+            echo "last_tag=$LAST_TAG" >> "$GITHUB_OUTPUT"
+            echo "dep_count=$DEP_COUNT" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check for existing release PR
+        id: existing
+        if: steps.check.outputs.has_updates == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          COUNT=$(gh pr list --base develop --state open \
+            --search "chore: release" --json number --jq 'length')
+          if [[ "$COUNT" -gt 0 ]]; then
+            echo "Open release PR already exists — skipping"
+            echo "pr_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "pr_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bump patch version
+        id: bump
+        if: steps.check.outputs.has_updates == 'true' && steps.existing.outputs.pr_exists == 'false'
+        run: |
+          if [[ ! -f VERSION ]]; then
+            echo "ERROR: VERSION file not found — cannot bump version" >&2
+            exit 1
+          fi
+
+          CURRENT=$(tr -d '[:space:]' < VERSION)
+          BASE="${CURRENT%%-*}"  # strip any pre-release suffix
+
+          if [[ ! "$BASE" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "ERROR: Invalid semver in VERSION: '$CURRENT'" >&2
+            exit 1
+          fi
+
+          MAJOR="${BASH_REMATCH[1]}"
+          MINOR="${BASH_REMATCH[2]}"
+          PATCH="${BASH_REMATCH[3]}"
+          NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+
+          echo "$NEW_VERSION" > VERSION
+          echo "Bumped $CURRENT → $NEW_VERSION"
+          echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "current_version=$CURRENT" >> "$GITHUB_OUTPUT"
+
+          # Update CHANGELOG if present — move [Unreleased] to a versioned entry
+          if [[ -f CHANGELOG.md ]] && grep -q '## \[Unreleased\]' CHANGELOG.md; then
+            TODAY=$(date +%Y-%m-%d)
+            awk -v ver="$NEW_VERSION" -v date="$TODAY" '
+              /^## \[Unreleased\]$/ {
+                print "## [Unreleased]"
+                print ""
+                print "## [" ver "] - " date
+                next
+              }
+              { print }
+            ' CHANGELOG.md > CHANGELOG.md.tmp
+            mv CHANGELOG.md.tmp CHANGELOG.md
+            echo "Updated CHANGELOG.md"
+          fi
+
+      - name: Commit and open PR
+        if: steps.check.outputs.has_updates == 'true' && steps.existing.outputs.pr_exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+          BRANCH="chore/release-v${NEW_VERSION}"
+          DEP_COUNT="${{ steps.check.outputs.dep_count }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b "$BRANCH"
+          git add VERSION
+          [[ -f CHANGELOG.md ]] && git add CHANGELOG.md
+          git commit -m "chore: release v${NEW_VERSION}"
+          git push origin "$BRANCH"
+
+          printf '## Monthly dependency patch — v%s\n\nThis PR was opened automatically. It bumps the patch version to capture\n**%s Dependabot update(s)** merged to `develop` since the last release.\n\n## What to do\n1. Review the dependency commits included in this release\n2. Merge this PR into `develop`\n3. Promote `develop`→`main` via CLI merge (or run `/publish-release`)\n4. Push the tag to trigger the release pipeline\n\n> **Note:** CI will not auto-run on this PR due to GitHub token restrictions.\n> All dependency changes were individually validated by CI when Dependabot\n> merged them to `develop`. Trigger CI manually if you want an extra check.\n' \
+            "${NEW_VERSION}" "${DEP_COUNT}" > /tmp/pr-body.md
+
+          gh pr create \
+            --base develop \
+            --head "$BRANCH" \
+            --title "chore: release v${NEW_VERSION} (monthly dependency patch)" \
+            --body-file /tmp/pr-body.md

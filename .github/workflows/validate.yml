@@ -1,0 +1,143 @@
+name: Validate
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Job 0: Detect changed files (PR only) ─────────────────────────────────
+  # Use this to skip expensive jobs (macOS runners, paid APIs, long test suites)
+  # when a PR only touches CI/workflow files.
+  #
+  # Usage: add `needs: [detect-changes]` and
+  #   `if: needs.detect-changes.outputs.source_changed == 'true'`
+  # to any job you want to skip on CI-only PRs.
+  #
+  # Adjust the grep pattern to match YOUR project's source paths. The default
+  # skips macOS/expensive jobs when every changed file is under .github/.
+  detect-changes:
+    name: Detect Changed Files
+    runs-on: ubuntu-latest
+    outputs:
+      source_changed: ${{ steps.filter.outputs.source }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
+      - name: Check for source file changes
+        id: filter
+        run: |
+          # On non-PR events (push to main/develop, workflow_call, tags) always run.
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            echo "source=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # On PRs: output false only if every changed file is under .github/
+          git diff --name-only "origin/${{ github.base_ref }}...HEAD" \
+            | grep -qvE '^\.github/' \
+            && echo "source=true" >> "$GITHUB_OUTPUT" \
+            || echo "source=false" >> "$GITHUB_OUTPUT"
+
+  # ── Lint ───────────────────────────────────────────────────────────────────
+  # Customise this job for your project's language/toolchain.
+  # Examples:
+  #   Shell:      shellcheck **/*.sh
+  #   Go:         go vet ./... && golangci-lint run
+  #   Python:     ruff check . && mypy .
+  #   Node:       npm run lint
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Lint
+        run: |
+          echo "TODO: add lint steps for this project"
+
+  # ── Commit Lint (PRs only) ──────────────────────────────────────────────────
+  commit-lint:
+    name: Commit Lint
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
+      - name: Check conventional commit format
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          PATTERN='^(feat|fix|docs|chore|refactor|test|style|perf|ci|build|revert)(\([^)]+\))?(!)?: .+'
+          FAIL=0
+
+          while IFS= read -r msg; do
+            [[ -z "$msg" ]] && continue
+            if echo "$msg" | grep -Eq "$PATTERN"; then
+              echo "  ✓ $msg"
+            else
+              echo "  ✗ Non-conventional: $msg"
+              FAIL=1
+            fi
+          done < <(git log --no-merges --format='%s' "${BASE_SHA}..${HEAD_SHA}")
+
+          if [[ $FAIL -eq 1 ]]; then
+            echo ""
+            echo "Commit messages must follow: <type>[scope][!]: <description>"
+            echo "Types: feat fix docs chore refactor test style perf ci build revert"
+            exit 1
+          fi
+          echo "All commit messages are conventional ✓"
+
+      - name: Suggest semver bump
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          BUMP="patch"
+          BREAKING=""
+          FEATURES=""
+
+          while IFS= read -r msg; do
+            [[ -z "$msg" ]] && continue
+            if echo "$msg" | grep -Eq '^(feat|fix|docs|chore|refactor|test|style|perf|ci|build|revert)(\([^)]+\))?!: '; then
+              BREAKING="$BREAKING\n  - $msg"
+              BUMP="major"
+            elif echo "$msg" | grep -Eq '^feat(\([^)]+\))?: '; then
+              FEATURES="$FEATURES\n  - $msg"
+              [[ "$BUMP" != "major" ]] && BUMP="minor"
+            fi
+          done < <(git log --no-merges --format='%s' "${BASE_SHA}..${HEAD_SHA}")
+
+          {
+            case $BUMP in
+              major)
+                echo "## ⚠️ Suggested bump: \`major\`"
+                echo ""
+                echo "This PR contains **breaking changes** — increment the major version."
+                printf "%b\n" "$BREAKING"
+                ;;
+              minor)
+                echo "## ✨ Suggested bump: \`minor\`"
+                echo ""
+                echo "This PR adds **new functionality** — increment the minor version."
+                printf "%b\n" "$FEATURES"
+                ;;
+              patch)
+                echo "## 🔧 Suggested bump: \`patch\`"
+                echo ""
+                echo "This PR is a **fix or maintenance** change — increment the patch version."
+                ;;
+            esac
+            echo ""
+            echo "Tag the next release with: \`./scripts/bump-version.sh $BUMP\`"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
