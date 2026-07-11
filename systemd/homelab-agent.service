@@ -1,0 +1,36 @@
+# Phase 1 posture: the agent observes, it never mutates. It runs as an
+# unprivileged user with a read-only view of the system; the only
+# privilege escalation is smartctl via the sudoers fragment shipped
+# alongside this unit (see docs/design/agent-design.md).
+[Unit]
+Description=Homelab observability agent
+Documentation=https://github.com/amcheste/homelab-agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/homelab-agent --config /etc/homelab-agent/config.toml
+User=homelab-agent
+Group=homelab-agent
+Restart=always
+RestartSec=5
+
+# Hardening: read-only OS view, private tmp, no privilege escalation
+# beyond the explicit sudo rule for smartctl.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+StateDirectory=homelab-agent
+ConfigurationDirectory=homelab-agent
+
+[Install]
+WantedBy=multi-user.target

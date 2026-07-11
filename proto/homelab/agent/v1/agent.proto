@@ -1,0 +1,144 @@
+// homelab.agent.v1 — contract between node agents and the control plane.
+//
+// This file is the source of truth for agent <-> control plane comms.
+// The Rust agent generates client code via tonic-build (see build.rs);
+// the Go control plane generates server code via protoc-gen-go.
+//
+// Evolution rules: never reuse or renumber fields, only add new optional
+// fields, and gate new behavior on agent_version reported in Hello.
+// This lives in the agent repo for now and moves to a shared home once
+// the control plane API surface grows.
+
+syntax = "proto3";
+
+package homelab.agent.v1;
+
+option go_package = "github.com/amcheste/homelab-control-plane/gen/agent/v1;agentv1";
+
+// AgentGateway is implemented by the control plane. Agents dial out and
+// hold a single long-lived bidirectional stream; the control plane never
+// initiates connections to nodes.
+service AgentGateway {
+  // Enroll exchanges a one-time enrollment token for a per-node
+  // credential. Called once on first boot (or after credential loss).
+  rpc Enroll(EnrollRequest) returns (EnrollResponse);
+
+  // Stream is the persistent bidirectional channel. Agent -> control
+  // plane carries telemetry; control plane -> agent is reserved for
+  // phase 2 actuation and today only carries acks/pings.
+  rpc Stream(stream AgentMessage) returns (stream ControlMessage);
+}
+
+// ── Enrollment ──────────────────────────────────────────────────────────
+
+message EnrollRequest {
+  string enrollment_token = 1; // one-time token baked in at provision time
+  string machine_id = 2;       // /etc/machine-id
+  string hostname = 3;
+  string agent_version = 4;
+}
+
+message EnrollResponse {
+  string node_id = 1;         // stable identity assigned by the control plane
+  string node_credential = 2; // long-lived bearer credential for Stream auth
+}
+
+// ── Agent -> control plane ──────────────────────────────────────────────
+
+message AgentMessage {
+  oneof payload {
+    Hello hello = 1;
+    Heartbeat heartbeat = 2;
+    Inventory inventory = 3;
+    SmartReport smart_report = 4;
+    StorageUsage storage_usage = 5;
+  }
+}
+
+// Hello is the first message on every stream.
+message Hello {
+  string node_id = 1;
+  string machine_id = 2;
+  string hostname = 3;
+  string agent_version = 4;
+  uint64 boot_time_unix_seconds = 5;
+}
+
+message Heartbeat {
+  uint64 sent_at_unix_seconds = 1;
+  uint64 uptime_seconds = 2;
+  double load_1m = 3;
+  double load_5m = 4;
+  double load_15m = 5;
+  uint64 memory_total_bytes = 6;
+  uint64 memory_used_bytes = 7;
+}
+
+// Inventory is sent on connect and whenever hardware changes.
+message Inventory {
+  string hostname = 1;
+  string os_name = 2;    // e.g. "Rocky Linux"
+  string os_version = 3; // e.g. "9.4"
+  string kernel = 4;
+  string cpu_model = 5;
+  uint32 cpu_cores = 6;
+  uint64 memory_total_bytes = 7;
+  repeated Disk disks = 8;
+  repeated NetworkInterface network_interfaces = 9;
+}
+
+message Disk {
+  string name = 1; // e.g. "sda", "nvme0n1"
+  string model = 2;
+  string serial = 3;
+  uint64 size_bytes = 4;
+}
+
+message NetworkInterface {
+  string name = 1;
+  string mac_address = 2;
+  repeated string addresses = 3;
+}
+
+// SmartReport relays smartctl output per device. The raw JSON is passed
+// through verbatim so parsing can evolve on the control plane without an
+// agent release; the summary fields cover the common alerting cases.
+message SmartReport {
+  string device = 1;             // e.g. "/dev/sda"
+  bool healthy = 2;              // smart_status.passed
+  int32 temperature_celsius = 3; // 0 when unavailable
+  uint64 power_on_hours = 4;
+  string raw_json = 5; // full `smartctl --json` output
+}
+
+message StorageUsage {
+  repeated Filesystem filesystems = 1;
+}
+
+message Filesystem {
+  string mount_point = 1;
+  string fs_type = 2;
+  string device = 3;
+  uint64 total_bytes = 4;
+  uint64 used_bytes = 5;
+}
+
+// ── Control plane -> agent ──────────────────────────────────────────────
+
+// ControlMessage is intentionally minimal in phase 1. Phase 2 actuation
+// (disk configuration etc.) adds new payload variants here, each with its
+// own authorization design, without any transport change.
+message ControlMessage {
+  oneof payload {
+    Ack ack = 1;
+    Ping ping = 2;
+  }
+}
+
+message Ack {
+  string detail = 1;
+}
+
+message Ping {
+  uint64 sent_at_unix_seconds = 1;
+}
