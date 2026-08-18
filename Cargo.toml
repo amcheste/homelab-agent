@@ -1,0 +1,36 @@
+[package]
+name = "homelab-agent"
+version = "0.1.0"
+edition = "2021"
+description = "Rust observability agent for homelab nodes, reports to the Go control plane over gRPC"
+license = "MIT"
+repository = "https://github.com/amcheste/homelab-agent"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+prost = "0.13"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sysinfo = "0.33"
+tokio = { version = "1", features = [
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+    "sync",
+    "time",
+] }
+tokio-stream = "0.1"
+toml = "0.8"
+tonic = { version = "0.12", features = ["tls", "tls-native-roots"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[build-dependencies]
+protoc-bin-vendored = "3"
+tonic-build = "0.12"
+
+[profile.release]
+strip = true
+lto = true

@@ -9,3 +9,15 @@ ci:
 docs:
   - changed-files:
     - any-glob-to-any-file: ['*.md', 'docs/**']
+
+agent:
+  - changed-files:
+    - any-glob-to-any-file: ['src/**', 'Cargo.toml', 'Cargo.lock', 'build.rs']
+
+proto:
+  - changed-files:
+    - any-glob-to-any-file: ['proto/**']
+
+deploy:
+  - changed-files:
+    - any-glob-to-any-file: ['systemd/**', 'config/**']

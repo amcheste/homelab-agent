@@ -1,0 +1,16 @@
+# homelab-agent configuration. Install as /etc/homelab-agent/config.toml.
+
+[control_plane]
+# gRPC endpoint of the control plane's AgentGateway service.
+endpoint = "https://control.lab.example:9443"
+
+# One-time enrollment token, written at provision time (kickstart %post)
+# and consumed on first contact. Defaults shown.
+#enrollment_token_path = "/etc/homelab-agent/enrollment-token"
+#credential_path = "/var/lib/homelab-agent/credential"
+
+[intervals]
+# All values in seconds. Defaults shown.
+#heartbeat_secs = 30
+#storage_secs = 300
+#smart_secs = 3600

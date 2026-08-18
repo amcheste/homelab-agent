@@ -6,7 +6,24 @@ This file is read by Claude Code at the start of every session in this repo.
 
 ## About This Repo
 
-<!-- TODO: describe what this project does -->
+Rust observability agent for homelab nodes. It dials out to the Go
+control plane (separate repo) and holds one persistent bidirectional
+gRPC stream; the wire contract is `proto/homelab/agent/v1/agent.proto`,
+generated on this side by tonic-build with a vendored protoc. Phase 1 is
+observability only (heartbeat, inventory, filesystem usage, SMART via
+`smartctl --json`); phase 2 actuation is sketched but not started. The
+design doc at `docs/design/agent-design.md` is the reference.
+
+Invariants to preserve when editing:
+
+- The agent never listens on a port and never mutates the node in
+  phase 1. It runs unprivileged; smartctl is the only escalation.
+- Proto evolution: never reuse field numbers, additive changes only,
+  gate behavior on `agent_version` from Hello.
+- Deploy target is `x86_64-unknown-linux-musl` (static, rustls). Don't
+  add deps that break the static build (e.g. anything linking OpenSSL).
+- CI runs `cargo fmt --check`, `cargo clippy -- -D warnings`, and
+  `cargo test`; keep all three passing.
 
 ---
 
@@ -30,6 +47,12 @@ This file is read by Claude Code at the start of every session in this repo.
 - Shell scripts must pass `shellcheck`
 - Use `set -euo pipefail`
 - Scripts should be idempotent
+
+### Rust Standards
+- `cargo fmt` before committing; CI enforces `--check`
+- Clippy clean with `-D warnings`
+- Commit `Cargo.lock` (this is a binary crate)
+- Prefer `anyhow` at binary edges, typed errors only where callers match on them
 
 ---
 
