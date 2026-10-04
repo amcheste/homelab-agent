@@ -2,6 +2,7 @@ mod collect;
 mod config;
 mod transport;
 
+#[allow(clippy::result_large_err)]
 pub mod pb {
     tonic::include_proto!("homelab.agent.v1");
 }
